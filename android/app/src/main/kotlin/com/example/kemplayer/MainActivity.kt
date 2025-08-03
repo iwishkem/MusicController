@@ -4,9 +4,9 @@ import android.content.ComponentName
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.os.Bundle
-import android.util.Log
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -16,11 +16,10 @@ class MainActivity : FlutterActivity() {
     private var listener: MediaSessionManager.OnActiveSessionsChangedListener? = null
     private var currentPackage: String? = null
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
 
         mediaSessionManager = getSystemService(MediaSessionManager::class.java)
-
         val componentName = ComponentName(this, NotificationListener::class.java)
 
         listener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
@@ -28,12 +27,12 @@ class MainActivity : FlutterActivity() {
                 mediaController = controllers[0]
                 currentPackage = mediaController?.packageName
                 setUpCallback()
-                sendMediaInfoToFlutter()
+                sendMediaInfoToFlutter(flutterEngine)
             }
         }
         mediaSessionManager?.addOnActiveSessionsChangedListener(listener!!, componentName)
 
-        MethodChannel(flutterEngine?.dartExecutor?.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getMediaInfo" -> {
                     val info = getCurrentMediaInfo()
@@ -52,11 +51,11 @@ class MainActivity : FlutterActivity() {
     private fun setUpCallback() {
         mediaController?.registerCallback(object : MediaController.Callback() {
             override fun onMetadataChanged(metadata: android.media.MediaMetadata?) {
-                sendMediaInfoToFlutter()
+                sendMediaInfoToFlutter(flutterEngine!!)
             }
 
             override fun onPlaybackStateChanged(state: android.media.session.PlaybackState?) {
-                sendMediaInfoToFlutter()
+                sendMediaInfoToFlutter(flutterEngine!!)
             }
         })
     }
@@ -86,10 +85,11 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun sendMediaInfoToFlutter() {
+    private fun sendMediaInfoToFlutter(flutterEngine: FlutterEngine) {
         val mediaInfo = getCurrentMediaInfo()
         runOnUiThread {
-            MethodChannel(flutterEngine?.dartExecutor?.binaryMessenger, CHANNEL).invokeMethod("mediaInfoUpdated", mediaInfo)
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
+                .invokeMethod("mediaInfoUpdated", mediaInfo)
         }
     }
 

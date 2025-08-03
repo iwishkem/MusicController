@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:media_notification_listener/media_notification_listener.dart';
+import 'package:flutter/services.dart';
 
-void main() => runApp(KemPlayerApp());
+void main() {
+  runApp(KemPlayerApp());
+}
 
 class KemPlayerApp extends StatelessWidget {
   @override
@@ -20,42 +22,73 @@ class MusicControlScreen extends StatefulWidget {
 }
 
 class _MusicControlScreenState extends State<MusicControlScreen> {
-  MediaNotification? _notification;
+  static const platform = MethodChannel('kemplayer/media');
+
+  String title = 'Şarkı Adı';
+  String artist = 'Sanatçı';
+  String albumArtUri = '';
 
   @override
   void initState() {
     super.initState();
-    MediaNotificationListener().stream.listen((notification) {
+    platform.setMethodCallHandler(_platformCallHandler);
+    _updateMediaInfo();
+  }
+
+  Future<void> _updateMediaInfo() async {
+    try {
+      final info = await platform.invokeMethod('getMediaInfo');
       setState(() {
-        _notification = notification;
+        title = info['title'] ?? 'Şarkı Adı';
+        artist = info['artist'] ?? 'Sanatçı';
+        albumArtUri = info['albumArtUri'] ?? '';
       });
-    });
+    } on PlatformException catch (e) {
+      print("Failed to get media info: '${e.message}'.");
+    }
+  }
+
+  Future<void> _sendMediaControl(String command) async {
+    try {
+      await platform.invokeMethod('mediaControl', {'command': command});
+    } on PlatformException catch (e) {
+      print("Failed to send media control: '${e.message}'.");
+    }
+  }
+
+  Future<dynamic> _platformCallHandler(MethodCall call) async {
+    switch (call.method) {
+      case 'mediaInfoUpdated':
+        _updateMediaInfo();
+        break;
+      default:
+        print('Unknown method ${call.method}');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final artwork = _notification?.artUri != null
-        ? NetworkImage(_notification!.artUri!)
-        : AssetImage('assets/placeholder.png') as ImageProvider;
+    final albumArt = albumArtUri.isNotEmpty
+        ? Image.network(albumArtUri, width: 200, height: 200, fit: BoxFit.cover)
+        : Image.asset('assets/placeholder.png', width: 200, height: 200);
 
     return Scaffold(
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            CircleAvatar(
-              radius: 100,
-              backgroundImage: artwork,
-              backgroundColor: Colors.grey[800],
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: albumArt,
             ),
             SizedBox(height: 20),
             Text(
-              _notification?.title ?? 'Şarkı Adı',
+              title,
               style: TextStyle(fontSize: 24),
               textAlign: TextAlign.center,
             ),
             Text(
-              _notification?.artist ?? 'Sanatçı',
+              artist,
               style: TextStyle(fontSize: 18, color: Colors.grey),
               textAlign: TextAlign.center,
             ),
@@ -64,17 +97,17 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 IconButton(
-                  icon: Icon(Icons.skip_previous),
-                  onPressed: () => MediaNotificationListener().prev(),
-                ),
+                    icon: Icon(Icons.skip_previous),
+                    iconSize: 40,
+                    onPressed: () => _sendMediaControl('previous')),
                 IconButton(
-                  icon: Icon(Icons.play_arrow),
-                  onPressed: () => MediaNotificationListener().play(),
-                ),
+                    icon: Icon(Icons.play_arrow),
+                    iconSize: 50,
+                    onPressed: () => _sendMediaControl('play_pause')),
                 IconButton(
-                  icon: Icon(Icons.skip_next),
-                  onPressed: () => MediaNotificationListener().next(),
-                ),
+                    icon: Icon(Icons.skip_next),
+                    iconSize: 40,
+                    onPressed: () => _sendMediaControl('next')),
               ],
             ),
           ],

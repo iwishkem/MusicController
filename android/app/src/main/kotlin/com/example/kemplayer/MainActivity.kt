@@ -23,13 +23,13 @@ class MainActivity : FlutterActivity() {
         val componentName = ComponentName(this, NotificationListener::class.java)
 
         listener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
-            if (controllers.isNotEmpty()) {
-                mediaController = controllers[0]
-                currentPackage = mediaController?.packageName
-                setUpCallback()
-                sendMediaInfoToFlutter(flutterEngine)
-            }
-        }
+    if (controllers != null && controllers.isNotEmpty()) {
+        mediaController = controllers[0]
+        currentPackage = mediaController?.packageName
+        setUpCallback()
+        sendMediaInfoToFlutter(flutterEngine)
+    }
+}
         mediaSessionManager?.addOnActiveSessionsChangedListener(listener!!, componentName)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->

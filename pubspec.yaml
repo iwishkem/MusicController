@@ -1,5 +1,5 @@
 name: kemplayer
-description: A simple universal music controller.
+description: A simple universal music controller with MediaSession support.
 version: 1.0.0+1
 
 environment:
@@ -8,7 +8,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  media_notification_listener: ^0.0.5
 
 dev_dependencies:
   flutter_test:

@@ -31,6 +31,7 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
   String albumArtUri = '';
   String albumArt = '';
   String displayIconUri = '';
+  String debugInfo = 'Waiting for media info...';
 
   @override
   void initState() {
@@ -49,6 +50,11 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
         albumArtUri = info['albumArtUri'] ?? '';
         albumArt = info['albumArt'] ?? '';
         displayIconUri = info['displayIconUri'] ?? '';
+        
+        // Create debug info for display
+        debugInfo = 'B64: ${albumArt.isNotEmpty ? "✓" : "✗"} | '
+                   'URI: ${albumArtUri.isNotEmpty ? "✓" : "✗"} | '
+                   'Icon: ${displayIconUri.isNotEmpty ? "✓" : "✗"}';
         
         // Debug logging
         print("Album art (base64): ${albumArt.isNotEmpty ? 'Available' : 'Empty'}");
@@ -79,6 +85,11 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
           albumArtUri = info['albumArtUri'] ?? '';
           albumArt = info['albumArt'] ?? '';
           displayIconUri = info['displayIconUri'] ?? '';
+          
+          // Update debug info
+          debugInfo = 'B64: ${albumArt.isNotEmpty ? "✓" : "✗"} | '
+                     'URI: ${albumArtUri.isNotEmpty ? "✓" : "✗"} | '
+                     'Icon: ${displayIconUri.isNotEmpty ? "✓" : "✗"}';
         });
         break;
       default:
@@ -150,6 +161,12 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
             Text(
               artist,
               style: TextStyle(fontSize: 18, color: Colors.grey),
+              textAlign: TextAlign.center,
+            ),
+            SizedBox(height: 10),
+            Text(
+              debugInfo,
+              style: TextStyle(fontSize: 12, color: Colors.orange),
               textAlign: TextAlign.center,
             ),
             SizedBox(height: 30),

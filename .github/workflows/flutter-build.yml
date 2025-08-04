@@ -2,10 +2,9 @@ name: Build Flutter APK
 
 on:
   push:
-    tags:
-      - 'v*.*.*'
-  workflow_dispatch:
-    # Allows manual triggering of the workflow
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   build:

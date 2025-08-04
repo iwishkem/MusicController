@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:convert';
+import 'dart:typed_data';
 
 void main() {
   runApp(KemPlayerApp());
@@ -27,6 +29,7 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
   String title = 'Şarkı Adı';
   String artist = 'Sanatçı';
   String albumArtUri = '';
+  String albumArt = '';
 
   @override
   void initState() {
@@ -42,6 +45,7 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
         title = info['title'] ?? 'Şarkı Adı';
         artist = info['artist'] ?? 'Sanatçı';
         albumArtUri = info['albumArtUri'] ?? '';
+        albumArt = info['albumArt'] ?? '';
       });
     } on PlatformException catch (e) {
       print("Failed to get media info: '${e.message}'.");
@@ -59,7 +63,13 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
   Future<dynamic> _platformCallHandler(MethodCall call) async {
     switch (call.method) {
       case 'mediaInfoUpdated':
-        _updateMediaInfo();
+        final info = call.arguments;
+        setState(() {
+          title = info['title'] ?? 'Şarkı Adı';
+          artist = info['artist'] ?? 'Sanatçı';
+          albumArtUri = info['albumArtUri'] ?? '';
+          albumArt = info['albumArt'] ?? '';
+        });
         break;
       default:
         print('Unknown method ${call.method}');
@@ -68,9 +78,23 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final albumArt = albumArtUri.isNotEmpty
-        ? Image.network(albumArtUri, width: 200, height: 200, fit: BoxFit.cover)
-        : Image.asset('assets/placeholder.png', width: 200, height: 200);
+    Widget albumArtWidget;
+    
+    if (albumArt.isNotEmpty) {
+      // Use base64 encoded album art from Android
+      try {
+        Uint8List bytes = base64Decode(albumArt);
+        albumArtWidget = Image.memory(bytes, width: 200, height: 200, fit: BoxFit.cover);
+      } catch (e) {
+        albumArtWidget = Image.asset('assets/placeholder.png', width: 200, height: 200);
+      }
+    } else if (albumArtUri.isNotEmpty) {
+      // Fallback to URI if available
+      albumArtWidget = Image.network(albumArtUri, width: 200, height: 200, fit: BoxFit.cover);
+    } else {
+      // Default placeholder
+      albumArtWidget = Image.asset('assets/placeholder.png', width: 200, height: 200);
+    }
 
     return Scaffold(
       body: Center(
@@ -79,7 +103,7 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: albumArt,
+              child: albumArtWidget,
             ),
             SizedBox(height: 20),
             Text(

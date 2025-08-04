@@ -1,13 +1,16 @@
 package com.example.kemplayer
 
 import android.content.ComponentName
+import android.graphics.Bitmap
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.os.Bundle
+import android.util.Base64
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "kemplayer/media"
@@ -62,11 +65,22 @@ class MainActivity : FlutterActivity() {
 
     private fun getCurrentMediaInfo(): Map<String, Any?> {
         val metadata = mediaController?.metadata
+        val albumArt = metadata?.getBitmap(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART)
+        val albumArtString = albumArt?.let { bitmapToBase64(it) }
+        
         return mapOf(
             "title" to metadata?.getString(android.media.MediaMetadata.METADATA_KEY_TITLE),
             "artist" to metadata?.getString(android.media.MediaMetadata.METADATA_KEY_ARTIST),
-            "albumArtUri" to metadata?.getString(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+            "albumArtUri" to metadata?.getString(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART_URI),
+            "albumArt" to albumArtString
         )
+    }
+
+    private fun bitmapToBase64(bitmap: Bitmap): String {
+        val outputStream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+        val byteArray = outputStream.toByteArray()
+        return Base64.encodeToString(byteArray, Base64.DEFAULT)
     }
 
     private fun controlMedia(command: String) {

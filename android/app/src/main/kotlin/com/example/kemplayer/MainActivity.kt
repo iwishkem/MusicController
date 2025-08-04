@@ -26,13 +26,37 @@ class MainActivity : FlutterActivity() {
         val componentName = ComponentName(this, NotificationListener::class.java)
 
         listener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
-    if (controllers != null && controllers.isNotEmpty()) {
-        mediaController = controllers[0]
-        currentPackage = mediaController?.packageName
-        setUpCallback()
-        sendMediaInfoToFlutter(flutterEngine)
-    }
-}
+            android.util.Log.d("MediaSession", "Active sessions changed: ${controllers?.size} controllers")
+            if (controllers != null && controllers.isNotEmpty()) {
+                // Find the controller with the most recent metadata
+                var bestController: MediaController? = null
+                for (controller in controllers) {
+                    val metadata = controller.metadata
+                    if (metadata != null) {
+                        val title = metadata.getString(android.media.MediaMetadata.METADATA_KEY_TITLE)
+                        if (!title.isNullOrEmpty()) {
+                            bestController = controller
+                            break
+                        }
+                    }
+                }
+                
+                if (bestController != null) {
+                    mediaController = bestController
+                    currentPackage = mediaController?.packageName
+                    android.util.Log.d("MediaSession", "Selected controller from package: $currentPackage")
+                    setUpCallback()
+                    sendMediaInfoToFlutter(flutterEngine)
+                } else if (controllers.isNotEmpty()) {
+                    // Fallback to first controller
+                    mediaController = controllers[0]
+                    currentPackage = mediaController?.packageName
+                    android.util.Log.d("MediaSession", "Fallback to first controller from package: $currentPackage")
+                    setUpCallback()
+                    sendMediaInfoToFlutter(flutterEngine)
+                }
+            }
+        }
         mediaSessionManager?.addOnActiveSessionsChangedListener(listener!!, componentName)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
@@ -66,13 +90,23 @@ class MainActivity : FlutterActivity() {
     private fun getCurrentMediaInfo(): Map<String, Any?> {
         val metadata = mediaController?.metadata
         val albumArt = metadata?.getBitmap(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART)
+        val albumArtUri = metadata?.getString(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+        val displayIconUri = metadata?.getString(android.media.MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)
+        
+        // Debug logging
+        android.util.Log.d("MediaInfo", "Album art bitmap: ${albumArt != null}")
+        android.util.Log.d("MediaInfo", "Album art URI: $albumArtUri")
+        android.util.Log.d("MediaInfo", "Display icon URI: $displayIconUri")
+        android.util.Log.d("MediaInfo", "Title: ${metadata?.getString(android.media.MediaMetadata.METADATA_KEY_TITLE)}")
+        
         val albumArtString = albumArt?.let { bitmapToBase64(it) }
         
         return mapOf(
             "title" to metadata?.getString(android.media.MediaMetadata.METADATA_KEY_TITLE),
             "artist" to metadata?.getString(android.media.MediaMetadata.METADATA_KEY_ARTIST),
-            "albumArtUri" to metadata?.getString(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART_URI),
-            "albumArt" to albumArtString
+            "albumArtUri" to albumArtUri,
+            "albumArt" to albumArtString,
+            "displayIconUri" to displayIconUri
         )
     }
 

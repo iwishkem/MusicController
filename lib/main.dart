@@ -30,6 +30,7 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
   String artist = 'Sanatçı';
   String albumArtUri = '';
   String albumArt = '';
+  String displayIconUri = '';
 
   @override
   void initState() {
@@ -41,11 +42,18 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
   Future<void> _updateMediaInfo() async {
     try {
       final info = await platform.invokeMethod('getMediaInfo');
+      print("Received media info: $info"); // Debug logging
       setState(() {
         title = info['title'] ?? 'Şarkı Adı';
         artist = info['artist'] ?? 'Sanatçı';
         albumArtUri = info['albumArtUri'] ?? '';
         albumArt = info['albumArt'] ?? '';
+        displayIconUri = info['displayIconUri'] ?? '';
+        
+        // Debug logging
+        print("Album art (base64): ${albumArt.isNotEmpty ? 'Available' : 'Empty'}");
+        print("Album art URI: $albumArtUri");
+        print("Display icon URI: $displayIconUri");
       });
     } on PlatformException catch (e) {
       print("Failed to get media info: '${e.message}'.");
@@ -64,11 +72,13 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
     switch (call.method) {
       case 'mediaInfoUpdated':
         final info = call.arguments;
+        print("Platform callback received: $info"); // Debug logging
         setState(() {
           title = info['title'] ?? 'Şarkı Adı';
           artist = info['artist'] ?? 'Sanatçı';
           albumArtUri = info['albumArtUri'] ?? '';
           albumArt = info['albumArt'] ?? '';
+          displayIconUri = info['displayIconUri'] ?? '';
         });
         break;
       default:
@@ -85,14 +95,40 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
       try {
         Uint8List bytes = base64Decode(albumArt);
         albumArtWidget = Image.memory(bytes, width: 200, height: 200, fit: BoxFit.cover);
+        print("Using base64 album art");
       } catch (e) {
+        print("Failed to decode base64 album art: $e");
         albumArtWidget = Image.asset('assets/placeholder.png', width: 200, height: 200);
       }
+    } else if (displayIconUri.isNotEmpty) {
+      // Try display icon URI
+      print("Using display icon URI: $displayIconUri");
+      albumArtWidget = Image.network(
+        displayIconUri, 
+        width: 200, 
+        height: 200, 
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          print("Failed to load display icon: $error");
+          return Image.asset('assets/placeholder.png', width: 200, height: 200);
+        },
+      );
     } else if (albumArtUri.isNotEmpty) {
       // Fallback to URI if available
-      albumArtWidget = Image.network(albumArtUri, width: 200, height: 200, fit: BoxFit.cover);
+      print("Using album art URI: $albumArtUri");
+      albumArtWidget = Image.network(
+        albumArtUri, 
+        width: 200, 
+        height: 200, 
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          print("Failed to load album art URI: $error");
+          return Image.asset('assets/placeholder.png', width: 200, height: 200);
+        },
+      );
     } else {
       // Default placeholder
+      print("Using placeholder image");
       albumArtWidget = Image.asset('assets/placeholder.png', width: 200, height: 200);
     }
 

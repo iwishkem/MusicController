@@ -1,13 +1,15 @@
-package com.example.kemplayer
+package kemplayer.iwishkem.com.tr
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
@@ -37,16 +39,9 @@ class MainActivity: FlutterActivity() {
         override fun onActiveSessionsChanged(controllers: MutableList<MediaController>?) {
             Log.d("KemPlayer", "Active sessions changed: ${controllers?.size}")
             
-            // Unregister previous controller callback
             mediaController?.unregisterCallback(mediaControllerCallback)
-            
-            // Get the first active controller (usually the music app)
             mediaController = controllers?.firstOrNull()
-            
-            // Register callback for the new controller
             mediaController?.registerCallback(mediaControllerCallback)
-            
-            // Send initial data to Flutter
             sendMediaInfoToFlutter()
         }
     }
@@ -67,32 +62,41 @@ class MainActivity: FlutterActivity() {
                     handleMediaControl(command)
                     result.success(null)
                 }
+                "checkNotificationAccess" -> {
+                    result.success(isNotificationServiceEnabled())
+                }
+                "requestNotificationAccess" -> {
+                    openNotificationAccessSettings()
+                    result.success(null)
+                }
                 else -> {
                     result.notImplemented()
                 }
             }
         }
         
-        // Request notification listener permission and set up listener
         setupMediaSessionListener()
-        
-        // Try to get existing active sessions immediately
         refreshActiveSession()
+    }
+
+    private fun isNotificationServiceEnabled(): Boolean {
+        val packageName = packageName
+        val flat = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+        return flat != null && flat.contains(packageName)
+    }
+
+    private fun openNotificationAccessSettings() {
+        val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+        startActivity(intent)
     }
 
     private fun setupMediaSessionListener() {
         try {
             val component = ComponentName(this, NotificationListener::class.java)
             val activeSessions = mediaSessionManager.getActiveSessions(component)
-            
-            // Set up the listener for future changes
             mediaSessionManager.addOnActiveSessionsChangedListener(sessionListener, component)
-            
             Log.d("KemPlayer", "Media session listener set up. Active sessions: ${activeSessions.size}")
-            
-            // Handle existing sessions
             sessionListener.onActiveSessionsChanged(activeSessions)
-            
         } catch (e: SecurityException) {
             Log.e("KemPlayer", "Permission not granted for notification access", e)
         }
@@ -102,15 +106,12 @@ class MainActivity: FlutterActivity() {
         try {
             val component = ComponentName(this, NotificationListener::class.java)
             val activeSessions = mediaSessionManager.getActiveSessions(component)
-            
             Log.d("KemPlayer", "Refreshing active session. Found: ${activeSessions.size}")
             
             if (activeSessions.isNotEmpty()) {
                 mediaController?.unregisterCallback(mediaControllerCallback)
                 mediaController = activeSessions.first()
                 mediaController?.registerCallback(mediaControllerCallback)
-                
-                // Force send current info to Flutter
                 sendMediaInfoToFlutter()
             }
         } catch (e: SecurityException) {
@@ -169,7 +170,6 @@ class MainActivity: FlutterActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Refresh session when app comes to foreground
         refreshActiveSession()
     }
 

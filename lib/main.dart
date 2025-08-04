@@ -26,7 +26,7 @@ class MusicControlScreen extends StatefulWidget {
   _MusicControlScreenState createState() => _MusicControlScreenState();
 }
 
-class _MusicControlScreenState extends State<MusicControlScreen> {
+class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBindingObserver {
   static const platform = MethodChannel('kemplayer/media');
 
   String title = 'Şarkı Adı';
@@ -41,13 +41,30 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
     super.initState();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     platform.setMethodCallHandler(_platformCallHandler);
+    
+    // Add observer for app lifecycle
+    WidgetsBinding.instance.addObserver(this);
+    
     _updateMediaInfo();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    
+    // Refresh media info when app becomes active
+    if (state == AppLifecycleState.resumed) {
+      Future.delayed(Duration(milliseconds: 500), () {
+        _updateMediaInfo();
+      });
+    }
   }
 
   Future<void> _updateMediaInfo() async {

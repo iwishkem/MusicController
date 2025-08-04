@@ -89,24 +89,23 @@ class MainActivity : FlutterActivity() {
 
     private fun getCurrentMediaInfo(): Map<String, Any?> {
         val metadata = mediaController?.metadata
+        val playbackState = mediaController?.playbackState
         val albumArt = metadata?.getBitmap(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART)
         val albumArtUri = metadata?.getString(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
         val displayIconUri = metadata?.getString(android.media.MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)
         
-        // Debug logging
-        android.util.Log.d("MediaInfo", "Album art bitmap: ${albumArt != null}")
-        android.util.Log.d("MediaInfo", "Album art URI: $albumArtUri")
-        android.util.Log.d("MediaInfo", "Display icon URI: $displayIconUri")
-        android.util.Log.d("MediaInfo", "Title: ${metadata?.getString(android.media.MediaMetadata.METADATA_KEY_TITLE)}")
-        
         val albumArtString = albumArt?.let { bitmapToBase64(it) }
+        
+        // Check if media is playing
+        val isPlaying = playbackState?.state == android.media.session.PlaybackState.STATE_PLAYING
         
         return mapOf(
             "title" to metadata?.getString(android.media.MediaMetadata.METADATA_KEY_TITLE),
             "artist" to metadata?.getString(android.media.MediaMetadata.METADATA_KEY_ARTIST),
             "albumArtUri" to albumArtUri,
             "albumArt" to albumArtString,
-            "displayIconUri" to displayIconUri
+            "displayIconUri" to displayIconUri,
+            "isPlaying" to isPlaying // Add this line
         )
     }
 

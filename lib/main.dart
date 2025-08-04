@@ -12,7 +12,10 @@ class KemPlayerApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'KemPlayer',
-      theme: ThemeData.dark(),
+      theme: ThemeData.dark().copyWith(
+        scaffoldBackgroundColor: Color(0xFF0A0A0A),
+        primaryColor: Color(0xFF1DB954),
+      ),
       home: MusicControlScreen(),
     );
   }
@@ -31,35 +34,32 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
   String albumArtUri = '';
   String albumArt = '';
   String displayIconUri = '';
-  String debugInfo = 'Waiting for media info...';
+  bool isPlaying = false;
 
   @override
   void initState() {
     super.initState();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     platform.setMethodCallHandler(_platformCallHandler);
     _updateMediaInfo();
+  }
+
+  @override
+  void dispose() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    super.dispose();
   }
 
   Future<void> _updateMediaInfo() async {
     try {
       final info = await platform.invokeMethod('getMediaInfo');
-      print("Received media info: $info"); // Debug logging
       setState(() {
         title = info['title'] ?? 'Şarkı Adı';
         artist = info['artist'] ?? 'Sanatçı';
         albumArtUri = info['albumArtUri'] ?? '';
         albumArt = info['albumArt'] ?? '';
         displayIconUri = info['displayIconUri'] ?? '';
-        
-        // Create debug info for display
-        debugInfo = 'B64: ${albumArt.isNotEmpty ? "✓" : "✗"} | '
-                   'URI: ${albumArtUri.isNotEmpty ? "✓" : "✗"} | '
-                   'Icon: ${displayIconUri.isNotEmpty ? "✓" : "✗"}';
-        
-        // Debug logging
-        print("Album art (base64): ${albumArt.isNotEmpty ? 'Available' : 'Empty'}");
-        print("Album art URI: $albumArtUri");
-        print("Display icon URI: $displayIconUri");
+        isPlaying = info['isPlaying'] ?? false;
       });
     } on PlatformException catch (e) {
       print("Failed to get media info: '${e.message}'.");
@@ -78,155 +78,351 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
     switch (call.method) {
       case 'mediaInfoUpdated':
         final info = call.arguments;
-        print("Platform callback received: $info"); // Debug logging
         setState(() {
           title = info['title'] ?? 'Şarkı Adı';
           artist = info['artist'] ?? 'Sanatçı';
           albumArtUri = info['albumArtUri'] ?? '';
           albumArt = info['albumArt'] ?? '';
           displayIconUri = info['displayIconUri'] ?? '';
-          
-          // Update debug info
-          debugInfo = 'B64: ${albumArt.isNotEmpty ? "✓" : "✗"} | '
-                     'URI: ${albumArtUri.isNotEmpty ? "✓" : "✗"} | '
-                     'Icon: ${displayIconUri.isNotEmpty ? "✓" : "✗"}';
+          isPlaying = info['isPlaying'] ?? false;
         });
         break;
-      default:
-        print('Unknown method ${call.method}');
     }
+  }
+
+  Widget _buildAlbumArt({double? width, double? height}) {
+    Widget albumArtWidget;
+    
+    if (albumArt.isNotEmpty) {
+      try {
+        String cleanBase64 = albumArt.replaceAll(RegExp(r'\s+'), '');
+        Uint8List bytes = base64Decode(cleanBase64);
+        albumArtWidget = Image.memory(
+          bytes, 
+          width: width ?? 200, 
+          height: height ?? 200, 
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) {
+            return _buildPlaceholder(width: width ?? 200, height: height ?? 200);
+          },
+        );
+      } catch (e) {
+        albumArtWidget = _buildPlaceholder(width: width ?? 200, height: height ?? 200);
+      }
+    } else if (displayIconUri.isNotEmpty) {
+      albumArtWidget = Image.network(
+        displayIconUri, 
+        width: width ?? 200, 
+        height: height ?? 200, 
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          return _buildPlaceholder(width: width ?? 200, height: height ?? 200);
+        },
+      );
+    } else if (albumArtUri.isNotEmpty) {
+      albumArtWidget = Image.network(
+        albumArtUri, 
+        width: width ?? 200, 
+        height: height ?? 200, 
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          return _buildPlaceholder(width: width ?? 200, height: height ?? 200);
+        },
+      );
+    } else {
+      albumArtWidget = _buildPlaceholder(width: width ?? 200, height: height ?? 200);
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.4),
+            blurRadius: 20,
+            offset: Offset(0, 10),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: albumArtWidget,
+      ),
+    );
+  }
+
+  Widget _buildPlaceholder({required double width, required double height}) {
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF2A2A2A),
+            Color(0xFF1A1A1A),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Icon(
+        Icons.music_note,
+        size: width * 0.3,
+        color: Colors.white.withOpacity(0.3),
+      ),
+    );
+  }
+
+  Widget _buildControlButton({
+    required IconData icon,
+    required VoidCallback onTap,
+    required double size,
+    bool isPrimary = false,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: isPrimary ? 70 : 60,
+        height: isPrimary ? 70 : 60,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: isPrimary 
+            ? LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF1DB954), Color(0xFF1ED760)],
+              )
+            : LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF2A2A2A), Color(0xFF1A1A1A)],
+              ),
+          boxShadow: [
+            BoxShadow(
+              color: isPrimary 
+                ? Color(0xFF1DB954).withOpacity(0.4)
+                : Colors.black.withOpacity(0.3),
+              blurRadius: 15,
+              offset: Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Icon(
+          icon,
+          size: size,
+          color: Colors.white,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildControlButtons({double iconSize = 24, double playIconSize = 32}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        _buildControlButton(
+          icon: Icons.skip_previous_rounded,
+          onTap: () => _sendMediaControl('previous'),
+          size: iconSize,
+        ),
+        SizedBox(width: 30),
+        _buildControlButton(
+          icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+          onTap: () => _sendMediaControl('play_pause'),
+          size: playIconSize,
+          isPrimary: true,
+        ),
+        SizedBox(width: 30),
+        _buildControlButton(
+          icon: Icons.skip_next_rounded,
+          onTap: () => _sendMediaControl('next'),
+          size: iconSize,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPortraitLayout() {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color(0xFF0A0A0A),
+            Color(0xFF1A1A1A),
+            Color(0xFF0A0A0A),
+          ],
+        ),
+      ),
+      child: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Spacer(flex: 1),
+              
+              // Album Art
+              _buildAlbumArt(width: 280, height: 280),
+              
+              Spacer(flex: 1),
+              
+              // Song Info Card
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Color(0xFF1A1A1A).withOpacity(0.8),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: Color(0xFF2A2A2A),
+                    width: 1,
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      artist,
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: Color(0xFF9E9E9E),
+                        fontWeight: FontWeight.w500,
+                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              
+              SizedBox(height: 40),
+              
+              // Control Buttons
+              _buildControlButtons(iconSize: 28, playIconSize: 36),
+              
+              Spacer(flex: 1),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLandscapeLayout() {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [
+            Color(0xFF0A0A0A),
+            Color(0xFF1A1A1A),
+            Color(0xFF0A0A0A),
+          ],
+        ),
+      ),
+      child: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Row(
+            children: [
+              // Left side - Album Art
+              Expanded(
+                flex: 2,
+                child: Center(
+                  child: _buildAlbumArt(width: 240, height: 240),
+                ),
+              ),
+              
+              SizedBox(width: 40),
+              
+              // Right side - Info and Controls
+              Expanded(
+                flex: 3,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Song Info
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: Color(0xFF1A1A1A).withOpacity(0.8),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: Color(0xFF2A2A2A),
+                          width: 1,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: TextStyle(
+                              fontSize: 26,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          SizedBox(height: 8),
+                          Text(
+                            artist,
+                            style: TextStyle(
+                              fontSize: 18,
+                              color: Color(0xFF9E9E9E),
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    
+                    SizedBox(height: 32),
+                    
+                    // Control Buttons
+                    _buildControlButtons(iconSize: 32, playIconSize: 40),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    Widget albumArtWidget;
-    
-    print("Building UI - albumArt length: ${albumArt.length}"); // Add this debug line
-    
-    if (albumArt.isNotEmpty) {
-      // Use base64 encoded album art from Android
-      try {
-        // Clean the base64 string (remove any whitespace/newlines)
-        String cleanBase64 = albumArt.replaceAll(RegExp(r'\s+'), '');
-        print("Original base64 length: ${albumArt.length}");
-        print("Cleaned base64 length: ${cleanBase64.length}");
-        print("First 100 chars: ${cleanBase64.length > 100 ? cleanBase64.substring(0, 100) : cleanBase64}");
-        
-        Uint8List bytes = base64Decode(cleanBase64);
-        print("Decoded bytes length: ${bytes.length}");
-        
-        albumArtWidget = Image.memory(
-          bytes, 
-          width: 200, 
-          height: 200, 
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) {
-            print("Image.memory error: $error");
-            print("Stack trace: $stackTrace");
-            return Container(
-              width: 200,
-              height: 200,
-              color: Colors.red,
-              child: Center(child: Text("Image Error", style: TextStyle(color: Colors.white))),
-            );
-          },
-        );
-        print("Successfully created Image.memory widget");
-      } catch (e) {
-        print("Base64 decode error: $e");
-        print("Error type: ${e.runtimeType}");
-        print("Base64 string length: ${albumArt.length}");
-        print("First 100 chars: ${albumArt.length > 100 ? albumArt.substring(0, 100) : albumArt}");
-        albumArtWidget = Container(
-          width: 200,
-          height: 200,
-          color: Colors.yellow,
-          child: Center(child: Text("Decode Error", style: TextStyle(color: Colors.black))),
-        );
-      }
-    } else if (displayIconUri.isNotEmpty) {
-      // Try display icon URI
-      print("Using display icon URI: $displayIconUri");
-      albumArtWidget = Image.network(
-        displayIconUri, 
-        width: 200, 
-        height: 200, 
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) {
-          print("Failed to load display icon: $error");
-          return Image.asset('assets/placeholder.png', width: 200, height: 200);
-        },
-      );
-    } else if (albumArtUri.isNotEmpty) {
-      // Fallback to URI if available
-      print("Using album art URI: $albumArtUri");
-      albumArtWidget = Image.network(
-        albumArtUri, 
-        width: 200, 
-        height: 200, 
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) {
-          print("Failed to load album art URI: $error");
-          return Image.asset('assets/placeholder.png', width: 200, height: 200);
-        },
-      );
-    } else {
-      // Default placeholder
-      print("Using placeholder image - no art data available");
-      albumArtWidget = Container(
-        width: 200,
-        height: 200,
-        color: Colors.grey,
-        child: Center(child: Text("No Art", style: TextStyle(color: Colors.white))),
-      );
-    }
-
     return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: albumArtWidget,
-            ),
-            SizedBox(height: 20),
-            Text(
-              title,
-              style: TextStyle(fontSize: 24),
-              textAlign: TextAlign.center,
-            ),
-            Text(
-              artist,
-              style: TextStyle(fontSize: 18, color: Colors.grey),
-              textAlign: TextAlign.center,
-            ),
-            SizedBox(height: 10),
-            Text(
-              debugInfo,
-              style: TextStyle(fontSize: 12, color: Colors.orange),
-              textAlign: TextAlign.center,
-            ),
-            SizedBox(height: 30),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                IconButton(
-                    icon: Icon(Icons.skip_previous),
-                    iconSize: 40,
-                    onPressed: () => _sendMediaControl('previous')),
-                IconButton(
-                    icon: Icon(Icons.play_arrow),
-                    iconSize: 50,
-                    onPressed: () => _sendMediaControl('play_pause')),
-                IconButton(
-                    icon: Icon(Icons.skip_next),
-                    iconSize: 40,
-                    onPressed: () => _sendMediaControl('next')),
-              ],
-            ),
-          ],
-        ),
+      body: OrientationBuilder(
+        builder: (context, orientation) {
+          if (orientation == Orientation.landscape) {
+            return _buildLandscapeLayout();
+          } else {
+            return _buildPortraitLayout();
+          }
+        },
       ),
     );
   }

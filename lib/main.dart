@@ -104,11 +104,24 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
     if (albumArt.isNotEmpty) {
       // Use base64 encoded album art from Android
       try {
-        Uint8List bytes = base64Decode(albumArt);
-        albumArtWidget = Image.memory(bytes, width: 200, height: 200, fit: BoxFit.cover);
-        print("Using base64 album art");
+        // Clean the base64 string (remove any whitespace/newlines)
+        String cleanBase64 = albumArt.replaceAll(RegExp(r'\s+'), '');
+        Uint8List bytes = base64Decode(cleanBase64);
+        albumArtWidget = Image.memory(
+          bytes, 
+          width: 200, 
+          height: 200, 
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) {
+            print("Failed to display base64 image: $error");
+            return Image.asset('assets/placeholder.png', width: 200, height: 200);
+          },
+        );
+        print("Using base64 album art - size: ${bytes.length} bytes");
       } catch (e) {
         print("Failed to decode base64 album art: $e");
+        print("Base64 string length: ${albumArt.length}");
+        print("First 50 chars: ${albumArt.length > 50 ? albumArt.substring(0, 50) : albumArt}");
         albumArtWidget = Image.asset('assets/placeholder.png', width: 200, height: 200);
       }
     } else if (displayIconUri.isNotEmpty) {

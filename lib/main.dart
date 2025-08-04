@@ -101,28 +101,48 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
   Widget build(BuildContext context) {
     Widget albumArtWidget;
     
+    print("Building UI - albumArt length: ${albumArt.length}"); // Add this debug line
+    
     if (albumArt.isNotEmpty) {
       // Use base64 encoded album art from Android
       try {
         // Clean the base64 string (remove any whitespace/newlines)
         String cleanBase64 = albumArt.replaceAll(RegExp(r'\s+'), '');
+        print("Original base64 length: ${albumArt.length}");
+        print("Cleaned base64 length: ${cleanBase64.length}");
+        print("First 100 chars: ${cleanBase64.length > 100 ? cleanBase64.substring(0, 100) : cleanBase64}");
+        
         Uint8List bytes = base64Decode(cleanBase64);
+        print("Decoded bytes length: ${bytes.length}");
+        
         albumArtWidget = Image.memory(
           bytes, 
           width: 200, 
           height: 200, 
           fit: BoxFit.cover,
           errorBuilder: (context, error, stackTrace) {
-            print("Failed to display base64 image: $error");
-            return Image.asset('assets/placeholder.png', width: 200, height: 200);
+            print("Image.memory error: $error");
+            print("Stack trace: $stackTrace");
+            return Container(
+              width: 200,
+              height: 200,
+              color: Colors.red,
+              child: Center(child: Text("Image Error", style: TextStyle(color: Colors.white))),
+            );
           },
         );
-        print("Using base64 album art - size: ${bytes.length} bytes");
+        print("Successfully created Image.memory widget");
       } catch (e) {
-        print("Failed to decode base64 album art: $e");
+        print("Base64 decode error: $e");
+        print("Error type: ${e.runtimeType}");
         print("Base64 string length: ${albumArt.length}");
-        print("First 50 chars: ${albumArt.length > 50 ? albumArt.substring(0, 50) : albumArt}");
-        albumArtWidget = Image.asset('assets/placeholder.png', width: 200, height: 200);
+        print("First 100 chars: ${albumArt.length > 100 ? albumArt.substring(0, 100) : albumArt}");
+        albumArtWidget = Container(
+          width: 200,
+          height: 200,
+          color: Colors.yellow,
+          child: Center(child: Text("Decode Error", style: TextStyle(color: Colors.black))),
+        );
       }
     } else if (displayIconUri.isNotEmpty) {
       // Try display icon URI
@@ -152,8 +172,13 @@ class _MusicControlScreenState extends State<MusicControlScreen> {
       );
     } else {
       // Default placeholder
-      print("Using placeholder image");
-      albumArtWidget = Image.asset('assets/placeholder.png', width: 200, height: 200);
+      print("Using placeholder image - no art data available");
+      albumArtWidget = Container(
+        width: 200,
+        height: 200,
+        color: Colors.grey,
+        child: Center(child: Text("No Art", style: TextStyle(color: Colors.white))),
+      );
     }
 
     return Scaffold(

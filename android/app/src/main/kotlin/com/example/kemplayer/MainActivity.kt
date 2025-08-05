@@ -1,4 +1,4 @@
-package com.example.kemplayer
+package kemplayer.iwishkem.com.tr
 
 import android.content.ComponentName
 import android.content.Context

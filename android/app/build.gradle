@@ -23,7 +23,7 @@ if (flutterVersionName == null) {
 }
 
 android {
-    namespace "com.example.kemplayer"
+    namespace "kemplayer.iwishkem.com.tr"
     compileSdkVersion 35
     ndkVersion flutter.ndkVersion
 

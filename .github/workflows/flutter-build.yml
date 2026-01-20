@@ -11,47 +11,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout code
+      # 1. Kodları çek (v4 en güncelidir)
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
-      # Step 2: Set up Flutter
+      # 2. Java Kurulumu (Android build için gereklidir, garantiye alalım)
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # 3. Flutter Kurulumu
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.29.3'  # Update this if needed
+          flutter-version: '3.29.3' # İsterseniz 'channel: stable' da diyebilirsiniz
+          cache: true # SDK'yı önbelleğe alır, sonraki buildler hızlanır
 
-      # Step 3: Install dependencies
+      # 4. Bağımlılıkları Yükle
       - name: Install dependencies
         run: flutter pub get
 
-      # Step 4: Check for `build.gradle`, and create a Flutter project if not found
-      - name: Create new Flutter project if needed
-        run: |
-          if [ ! -f "android/build.gradle" ]; then
-            echo "No 'build.gradle' file found. Creating a new Flutter project."
-            flutter create .  # This creates a new Flutter project in the current directory
-          else
-            echo "'build.gradle' file found. Skipping Flutter project creation."
-          fi
-
-      # Step 5: Install Android SDK and other dependencies
-      - name: Set up Android SDK
-        run: |
-          echo "##[group]Installing dependencies"
-          sudo apt-get update -y
-          sudo apt-get install -y unzip curl
-          wget https://dl.google.com/android/repository/commandlinetools-linux-7583922_latest.zip
-          unzip commandlinetools-linux-7583922_latest.zip -d $HOME/Android
-          yes | $HOME/Android/cmdline-tools/bin/sdkmanager --sdk_root=$HOME/Android --licenses
-          $HOME/Android/cmdline-tools/bin/sdkmanager --sdk_root=$HOME/Android "platform-tools" "build-tools;30.0.3" "platforms;android-30"
-          echo "##[endgroup]"
-
-      # Step 6: Build APK
+      # 5. Build Al (Android SDK zaten yüklü olduğu için ekstra adıma gerek yok)
       - name: Build APK
         run: flutter build apk --release
 
-      # Step 7: Upload APK as artifact
+      # 6. APK'yı Artifact olarak yükle (İndirilebilir hale getir)
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:

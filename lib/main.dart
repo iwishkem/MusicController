@@ -23,7 +23,7 @@ class KemPlayerApp extends StatelessWidget {
   }
 }
 
-// --- WIDGET 1: The Isolated Background (Fixes Flickering) ---
+// --- WIDGET 1: Optimized Background (No Black Flashing) ---
 class BlurredBackground extends StatelessWidget {
   final ImageProvider? imageProvider;
   final Color mutedColor;
@@ -36,27 +36,33 @@ class BlurredBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // RepaintBoundary tells Flutter: "Don't repaint this if the parent changes"
     return RepaintBoundary(
       child: Stack(
         children: [
-          Container(color: Color(0xFF0A0A0A)),
+          Container(color: Color(0xFF0A0A0A)), // Base black layer
           if (imageProvider != null)
             Positioned.fill(
-              child: Image(
-                image: imageProvider!,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => Container(),
+              child: AnimatedSwitcher(
+                duration: Duration(milliseconds: 600),
+                child: Image(
+                  key: ValueKey(imageProvider.hashCode), // Only update if image object changes
+                  image: imageProvider!,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true, // <--- PREVENTS BLACK FLASHING
+                  errorBuilder: (_, __, ___) => Container(color: Color(0xFF0A0A0A)),
+                ),
               ),
             ),
+          // Blur Layer
           Positioned.fill(
             child: BackdropFilter(
               filter: ui.ImageFilter.blur(sigmaX: 50, sigmaY: 50),
               child: Container(
-                color: Colors.black.withOpacity(0.6), 
+                color: Colors.black.withOpacity(0.5), 
               ),
             ),
           ),
+          // Gradient Overlay for readability
           Positioned.fill(
             child: Container(
               decoration: BoxDecoration(
@@ -74,7 +80,7 @@ class BlurredBackground extends StatelessWidget {
   }
 }
 
-// --- WIDGET 2: The Main Screen ---
+// --- WIDGET 2: Main Screen ---
 class MusicControlScreen extends StatefulWidget {
   @override
   _MusicControlScreenState createState() => _MusicControlScreenState();
@@ -98,10 +104,14 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
   double playbackSpeed = 1.0;
   DateTime lastSyncTime = DateTime.now();
 
-  // Visuals
+  // Visuals & Caching
   Color accentColor = Color(0xFF1DB954);
   Color mutedColor = Colors.black;
   bool _isDialogShowing = false;
+  
+  // Image Caching to prevent rebuilds
+  ImageProvider? _cachedImageProvider;
+  String _lastAlbumArtString = '';
 
   @override
   void initState() {
@@ -136,39 +146,56 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
       if (!mounted) return;
 
       String newArt = info['albumArt'] ?? '';
-      bool artChanged = newArt != albumArtString;
+      String newUri = info['albumArtUri'] ?? '';
+      
+      // Only update palette if art actually changed
+      bool artChanged = (newArt != albumArtString) || (newUri != albumArtUri);
 
       setState(() {
         title = info['title'] ?? 'Waiting for music...';
         artist = info['artist'] ?? 'KemPlayer';
         albumArtString = newArt;
-        albumArtUri = info['albumArtUri'] ?? '';
+        albumArtUri = newUri;
         displayIconUri = info['displayIconUri'] ?? '';
         packageName = info['packageName'] ?? '';
         
-        // Critical: Update timing data
         duration = Duration(milliseconds: (info['duration'] ?? 0).toInt());
         position = Duration(milliseconds: (info['position'] ?? 0).toInt());
         isPlaying = info['isPlaying'] ?? false;
         playbackSpeed = (info['playbackSpeed'] ?? 1.0).toDouble();
         
-        // Mark the exact time we received this data for the Seekbar to use
         lastSyncTime = DateTime.now();
       });
 
-      if (artChanged) _updatePalette();
+      if (artChanged) {
+        _updateImageCache(); // Update the cached image
+        _updatePalette();    // Update colors
+      }
       
     } on PlatformException catch (e) {
       print("Failed: '${e.message}'.");
     }
   }
 
-  Future<void> _updatePalette() async {
-    ImageProvider? provider = _getImageProvider();
-    if (provider == null) return;
+  // Caching Logic: Prevents recreating MemoryImage every frame
+  void _updateImageCache() {
+    if (albumArtString.isNotEmpty) {
+      try {
+        _cachedImageProvider = MemoryImage(base64Decode(albumArtString.replaceAll(RegExp(r'\s+'), '')));
+      } catch (e) { _cachedImageProvider = null; }
+    } else if (displayIconUri.isNotEmpty) {
+      _cachedImageProvider = NetworkImage(displayIconUri);
+    } else if (albumArtUri.isNotEmpty) {
+      _cachedImageProvider = NetworkImage(albumArtUri);
+    } else {
+      _cachedImageProvider = null;
+    }
+  }
 
+  Future<void> _updatePalette() async {
+    if (_cachedImageProvider == null) return;
     try {
-      final palette = await PaletteGenerator.fromImageProvider(provider);
+      final palette = await PaletteGenerator.fromImageProvider(_cachedImageProvider!);
       if (mounted) {
         setState(() {
           accentColor = palette.vibrantColor?.color ?? palette.dominantColor?.color ?? Color(0xFF1DB954);
@@ -185,8 +212,9 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
   }
 
   Future<void> _seekTo(int ms) async {
+    // Send seek command
     await platform.invokeMethod('seekTo', {'position': ms});
-    // Immediate local update for snappiness
+    // Optimistic local update
     setState(() {
       position = Duration(milliseconds: ms);
       lastSyncTime = DateTime.now();
@@ -223,16 +251,6 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
         }
         break;
     }
-  }
-
-  ImageProvider? _getImageProvider() {
-    if (albumArtString.isNotEmpty) {
-      try {
-        return MemoryImage(base64Decode(albumArtString.replaceAll(RegExp(r'\s+'), '')));
-      } catch (e) { return null; }
-    } else if (displayIconUri.isNotEmpty) return NetworkImage(displayIconUri);
-    else if (albumArtUri.isNotEmpty) return NetworkImage(albumArtUri);
-    return null;
   }
 
   // --- LAYOUTS ---
@@ -280,8 +298,8 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(20),
-          child: _getImageProvider() != null 
-            ? Image(image: _getImageProvider()!, fit: BoxFit.cover)
+          child: _cachedImageProvider != null 
+            ? Image(image: _cachedImageProvider!, fit: BoxFit.cover, gaplessPlayback: true)
             : Container(color: Color(0xFF222222), child: Icon(Icons.music_note, size: 80, color: Colors.white12)),
         ),
       ),
@@ -294,8 +312,8 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // 1. Static Background (Won't rebuild on ticks)
-          BlurredBackground(imageProvider: _getImageProvider(), mutedColor: mutedColor),
+          // 1. Static Background (Cached & Optimized)
+          BlurredBackground(imageProvider: _cachedImageProvider, mutedColor: mutedColor),
           
           // 2. Active Content
           SafeArea(
@@ -315,7 +333,6 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
                               Text(title, style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white), maxLines: 2),
                               Text(artist, style: TextStyle(fontSize: 20, color: Colors.white70), maxLines: 1),
                               Spacer(),
-                              // 3. Isolated Progress Bar (Handles its own ticking)
                               LiveProgressBar(
                                 duration: duration,
                                 position: position,
@@ -346,7 +363,6 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
                         SizedBox(height: 8),
                         Text(artist, textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: Colors.white70), maxLines: 1),
                         Spacer(flex: 2),
-                        // 3. Isolated Progress Bar (Handles its own ticking)
                         LiveProgressBar(
                           duration: duration,
                           position: position,
@@ -372,7 +388,7 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
   }
 }
 
-// --- WIDGET 3: The Isolated Progress Bar (Fixes Sync & Ticking) ---
+// --- WIDGET 3: Isolated Progress Bar ---
 class LiveProgressBar extends StatefulWidget {
   final Duration duration;
   final Duration position;
@@ -407,7 +423,7 @@ class _LiveProgressBarState extends State<LiveProgressBar> {
     super.initState();
     _timer = Timer.periodic(Duration(milliseconds: 100), (timer) {
       if (widget.isPlaying && !_isDragging) {
-        setState(() {}); // Only rebuilds the slider, not the background!
+        setState(() {}); // Updates only the slider
       }
     });
   }
@@ -420,7 +436,7 @@ class _LiveProgressBarState extends State<LiveProgressBar> {
 
   @override
   Widget build(BuildContext context) {
-    // Calculate accurate position
+    // Calculate accurate position locally
     int currentMs;
     
     if (_isDragging) {
@@ -432,9 +448,8 @@ class _LiveProgressBarState extends State<LiveProgressBar> {
       currentMs = widget.position.inMilliseconds;
     }
 
-    // Safety Clamps
     final totalMs = widget.duration.inMilliseconds;
-    if (totalMs <= 0) return SizedBox(height: 30); // Hide if no duration
+    if (totalMs <= 0) return SizedBox(height: 30); 
     if (currentMs > totalMs) currentMs = totalMs;
     if (currentMs < 0) currentMs = 0;
 

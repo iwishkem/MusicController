@@ -8,6 +8,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  palette_generator: ^0.3.3  # Add this line
 
 dev_dependencies:
   flutter_test:

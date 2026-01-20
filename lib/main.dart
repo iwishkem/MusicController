@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
+import 'package:palette_generator/palette_generator.dart';
 
 void main() {
   runApp(KemPlayerApp());
@@ -12,9 +15,9 @@ class KemPlayerApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'KemPlayer',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: Color(0xFF0A0A0A),
-        primaryColor: Color(0xFF1DB954),
       ),
       home: MusicControlScreen(),
     );
@@ -29,20 +32,38 @@ class MusicControlScreen extends StatefulWidget {
 class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBindingObserver {
   static const platform = MethodChannel('kemplayer/media');
 
-  String title = 'Şarkı Adı';
-  String artist = 'Sanatçı';
+  // Media Info
+  String title = 'Waiting for music...';
+  String artist = 'KemPlayer';
   String albumArtUri = '';
   String albumArt = '';
   String displayIconUri = '';
+  String packageName = '';
   bool isPlaying = false;
+
+  // Progress & Timing
+  Duration duration = Duration.zero;
+  Duration position = Duration.zero;
+  int lastUpdateTime = 0;
+  double playbackSpeed = 1.0;
+  Timer? _progressTimer;
+  bool _isDraggingSlider = false;
+
+  // Colors & UI
+  Color accentColor = Color(0xFF1DB954); // Default Green
+  Color? imageMutedColor;
+  bool _isDialogShowing = false;
 
   @override
   void initState() {
     super.initState();
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    platform.setMethodCallHandler(_platformCallHandler);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      systemNavigationBarColor: Colors.transparent,
+    ));
     
-    // Add observer for app lifecycle
+    platform.setMethodCallHandler(_platformCallHandler);
     WidgetsBinding.instance.addObserver(this);
     
     _updateMediaInfo();
@@ -51,18 +72,22 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    _progressTimer?.cancel();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-    
-    // Refresh media info when app becomes active
     if (state == AppLifecycleState.resumed) {
-      Future.delayed(Duration(milliseconds: 500), () {
-        _updateMediaInfo();
+      Future.delayed(Duration(milliseconds: 500), _updateMediaInfo);
+    }
+  }
+
+  void _startProgressTimer() {
+    _progressTimer?.cancel();
+    if (isPlaying) {
+      _progressTimer = Timer.periodic(Duration(milliseconds: 1000), (_) {
+        if (!_isDraggingSlider && mounted) setState(() {});
       });
     }
   }
@@ -70,125 +95,236 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
   Future<void> _updateMediaInfo() async {
     try {
       final info = await platform.invokeMethod('getMediaInfo');
+      if (!mounted) return;
+
+      // Check if art changed to update palette
+      String newAlbumArt = info['albumArt'] ?? '';
+      String newUri = info['albumArtUri'] ?? '';
+      bool artChanged = (newAlbumArt != albumArt) || (newUri != albumArtUri);
+
       setState(() {
-        title = info['title'] ?? 'Şarkı Adı';
-        artist = info['artist'] ?? 'Sanatçı';
-        albumArtUri = info['albumArtUri'] ?? '';
-        albumArt = info['albumArt'] ?? '';
+        title = info['title'] ?? 'Waiting for music...';
+        artist = info['artist'] ?? 'KemPlayer';
+        albumArtUri = newUri;
+        albumArt = newAlbumArt;
         displayIconUri = info['displayIconUri'] ?? '';
         isPlaying = info['isPlaying'] ?? false;
+        packageName = info['packageName'] ?? '';
+        
+        duration = Duration(milliseconds: (info['duration'] ?? 0).toInt());
+        position = Duration(milliseconds: (info['position'] ?? 0).toInt());
+        lastUpdateTime = (info['lastUpdateTime'] ?? 0).toInt();
+        playbackSpeed = (info['playbackSpeed'] ?? 1.0).toDouble();
       });
+
+      if (artChanged) _updatePalette();
+      _startProgressTimer();
+      
     } on PlatformException catch (e) {
-      print("Failed to get media info: '${e.message}'.");
+      print("Failed: '${e.message}'.");
+    }
+  }
+
+  Future<void> _updatePalette() async {
+    ImageProvider? provider = _getImageProvider();
+    if (provider == null) {
+      setState(() => accentColor = Color(0xFF1DB954));
+      return;
+    }
+
+    try {
+      final palette = await PaletteGenerator.fromImageProvider(
+        provider,
+        maximumColorCount: 20,
+      );
+      if (mounted) {
+        setState(() {
+          // Try to get a vibrant color, fallback to light vibrant, then default
+          accentColor = palette.vibrantColor?.color ?? 
+                        palette.lightVibrantColor?.color ?? 
+                        palette.dominantColor?.color ?? 
+                        Color(0xFF1DB954);
+          
+          // Get a muted color for background tint if needed
+          imageMutedColor = palette.mutedColor?.color;
+        });
+      }
+    } catch (e) {
+      print("Error generating palette: $e");
     }
   }
 
   Future<void> _sendMediaControl(String command) async {
-    try {
-      await platform.invokeMethod('mediaControl', {'command': command});
-    } on PlatformException catch (e) {
-      print("Failed to send media control: '${e.message}'.");
+    await platform.invokeMethod('mediaControl', {'command': command});
+    // Optimistic update for UI responsiveness
+    if (command == 'play_pause') {
+      setState(() {
+        isPlaying = !isPlaying;
+        lastUpdateTime = DateTime.now().millisecondsSinceEpoch;
+      });
+      _startProgressTimer();
     }
   }
 
   Future<dynamic> _platformCallHandler(MethodCall call) async {
     switch (call.method) {
       case 'mediaInfoUpdated':
-        final info = call.arguments;
-        setState(() {
-          title = info['title'] ?? 'Şarkı Adı';
-          artist = info['artist'] ?? 'Sanatçı';
-          albumArtUri = info['albumArtUri'] ?? '';
-          albumArt = info['albumArt'] ?? '';
-          displayIconUri = info['displayIconUri'] ?? '';
-          isPlaying = info['isPlaying'] ?? false;
-        });
+        _updateMediaInfo(); // Refresh all data
+        break;
+      case 'requestPermission':
+        if (!_isDialogShowing && mounted) {
+          _isDialogShowing = true;
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: Color(0xFF1A1A1A),
+              title: Text("Permission Required", style: TextStyle(color: Colors.white)),
+              content: Text(
+                "KemPlayer needs 'Notification Access' to see music info.",
+                style: TextStyle(color: Colors.white70)
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    _isDialogShowing = false;
+                    Navigator.of(ctx).pop();
+                    platform.invokeMethod('openSettings'); 
+                  },
+                  child: Text("Open Settings", style: TextStyle(color: accentColor)),
+                )
+              ],
+            ),
+          );
+        }
         break;
     }
   }
 
-  Widget _buildAlbumArt({double? width, double? height}) {
-    Widget albumArtWidget;
-    
+  ImageProvider? _getImageProvider() {
     if (albumArt.isNotEmpty) {
       try {
-        String cleanBase64 = albumArt.replaceAll(RegExp(r'\s+'), '');
-        Uint8List bytes = base64Decode(cleanBase64);
-        albumArtWidget = Image.memory(
-          bytes, 
-          width: width ?? 200, 
-          height: height ?? 200, 
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) {
-            return _buildPlaceholder(width: width ?? 200, height: height ?? 200);
-          },
-        );
-      } catch (e) {
-        albumArtWidget = _buildPlaceholder(width: width ?? 200, height: height ?? 200);
-      }
+        return MemoryImage(base64Decode(albumArt.replaceAll(RegExp(r'\s+'), '')));
+      } catch (e) { return null; }
     } else if (displayIconUri.isNotEmpty) {
-      albumArtWidget = Image.network(
-        displayIconUri, 
-        width: width ?? 200, 
-        height: height ?? 200, 
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) {
-          return _buildPlaceholder(width: width ?? 200, height: height ?? 200);
-        },
-      );
+      return NetworkImage(displayIconUri);
     } else if (albumArtUri.isNotEmpty) {
-      albumArtWidget = Image.network(
-        albumArtUri, 
-        width: width ?? 200, 
-        height: height ?? 200, 
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) {
-          return _buildPlaceholder(width: width ?? 200, height: height ?? 200);
-        },
-      );
-    } else {
-      albumArtWidget = _buildPlaceholder(width: width ?? 200, height: height ?? 200);
+      return NetworkImage(albumArtUri);
     }
+    return null;
+  }
 
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.4),
-            blurRadius: 20,
-            offset: Offset(0, 10),
+  // --- UI WIDGETS ---
+
+  Widget _buildBlurredBackground() {
+    final imageProvider = _getImageProvider();
+    return Stack(
+      children: [
+        Container(color: Color(0xFF0A0A0A)),
+        if (imageProvider != null)
+          Positioned.fill(
+            child: Image(
+              image: imageProvider,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Container(),
+            ),
           ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(20),
-        child: albumArtWidget,
-      ),
+        Positioned.fill(
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 45, sigmaY: 45),
+            child: Container(
+              // Tint the dark background slightly with the image's muted color
+              color: Colors.black.withOpacity(0.6), 
+            ),
+          ),
+        ),
+        // Add a gradient fade for better text readability
+        Positioned.fill(
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.black.withOpacity(0.2),
+                  Colors.black.withOpacity(0.8),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
-  Widget _buildPlaceholder({required double width, required double height}) {
-    return Container(
-      width: width,
-      height: height,
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF2A2A2A),
-            Color(0xFF1A1A1A),
-          ],
+  Widget _buildProgressBar() {
+    // Calculate current position
+    int currentMs = position.inMilliseconds;
+    if (isPlaying && lastUpdateTime > 0) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final diff = now - lastUpdateTime;
+      currentMs += (diff * playbackSpeed).toInt();
+    }
+    
+    // Clamp values
+    final durationMs = duration.inMilliseconds;
+    if (currentMs > durationMs) currentMs = durationMs;
+    if (currentMs < 0) currentMs = 0;
+
+    double value = currentMs.toDouble();
+    double max = durationMs > 0 ? durationMs.toDouble() : 1.0;
+
+    return Column(
+      children: [
+        SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            trackHeight: 4,
+            thumbShape: RoundSliderThumbShape(enabledThumbRadius: 6),
+            overlayShape: RoundSliderOverlayShape(overlayRadius: 14),
+            activeTrackColor: accentColor, // Dynamic Color
+            inactiveTrackColor: Colors.white24,
+            thumbColor: Colors.white,
+            overlayColor: accentColor.withOpacity(0.2),
+          ),
+          child: Slider(
+            value: value.clamp(0.0, max),
+            min: 0.0,
+            max: max,
+            onChangeStart: (_) => _isDraggingSlider = true,
+            onChangeEnd: (newValue) {
+              _isDraggingSlider = false;
+              platform.invokeMethod('seekTo', {'position': newValue.toInt()});
+              setState(() {
+                position = Duration(milliseconds: newValue.toInt());
+                lastUpdateTime = DateTime.now().millisecondsSinceEpoch;
+              });
+            },
+            onChanged: (newValue) {
+              setState(() {}); // Visual update only
+            },
+          ),
         ),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Icon(
-        Icons.music_note,
-        size: width * 0.3,
-        color: Colors.white.withOpacity(0.3),
-      ),
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: 24),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(_formatDuration(Duration(milliseconds: currentMs)), 
+                   style: TextStyle(color: Colors.white54, fontSize: 12)),
+              Text(_formatDuration(duration), 
+                   style: TextStyle(color: Colors.white54, fontSize: 12)),
+            ],
+          ),
+        ),
+      ],
     );
+  }
+
+  String _formatDuration(Duration d) {
+    if (d.inHours > 0) {
+      return "${d.inHours}:${d.inMinutes.remainder(60).toString().padLeft(2, '0')}:${d.inSeconds.remainder(60).toString().padLeft(2, '0')}";
+    }
+    return "${d.inMinutes.remainder(60)}:${d.inSeconds.remainder(60).toString().padLeft(2, '0')}";
   }
 
   Widget _buildControlButton({
@@ -200,245 +336,193 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: isPrimary ? 70 : 60,
-        height: isPrimary ? 70 : 60,
+        width: isPrimary ? 75 : 55,
+        height: isPrimary ? 75 : 55,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          gradient: isPrimary 
-            ? LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF1DB954), Color(0xFF1ED760)],
-              )
-            : LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF2A2A2A), Color(0xFF1A1A1A)],
-              ),
-          boxShadow: [
+          color: isPrimary ? accentColor : Colors.transparent, // Dynamic Color
+          boxShadow: isPrimary ? [
             BoxShadow(
-              color: isPrimary 
-                ? Color(0xFF1DB954).withOpacity(0.4)
-                : Colors.black.withOpacity(0.3),
-              blurRadius: 15,
-              offset: Offset(0, 5),
-            ),
-          ],
+              color: accentColor.withOpacity(0.4),
+              blurRadius: 20,
+              offset: Offset(0, 8),
+            )
+          ] : null,
         ),
         child: Icon(
           icon,
           size: size,
-          color: Colors.white,
+          color: isPrimary ? Colors.black : Colors.white,
         ),
       ),
     );
   }
 
-  Widget _buildControlButtons({double iconSize = 24, double playIconSize = 32}) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+  Widget _buildAlbumArt({double? width, double? height}) {
+    final imageProvider = _getImageProvider();
+    
+    return GestureDetector(
+      onTap: () => platform.invokeMethod('openApp', {'packageName': packageName}),
+      child: Container(
+        width: width,
+        height: height,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.5),
+              blurRadius: 30,
+              offset: Offset(0, 15),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(20),
+          child: imageProvider != null 
+            ? Image(image: imageProvider, fit: BoxFit.cover)
+            : Container(
+                color: Color(0xFF2A2A2A),
+                child: Icon(Icons.music_note_rounded, size: 80, color: Colors.white12),
+              ),
+        ),
+      ),
+    );
+  }
+
+  // --- LAYOUTS ---
+
+  Widget _buildPortraitLayout() {
+    return Stack(
       children: [
-        _buildControlButton(
-          icon: Icons.skip_previous_rounded,
-          onTap: () => _sendMediaControl('previous'),
-          size: iconSize,
-        ),
-        SizedBox(width: 30),
-        _buildControlButton(
-          icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-          onTap: () => _sendMediaControl('play_pause'),
-          size: playIconSize,
-          isPrimary: true,
-        ),
-        SizedBox(width: 30),
-        _buildControlButton(
-          icon: Icons.skip_next_rounded,
-          onTap: () => _sendMediaControl('next'),
-          size: iconSize,
+        _buildBlurredBackground(),
+        SafeArea(
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24),
+            child: Column(
+              children: [
+                Spacer(flex: 3),
+                Hero(
+                  tag: 'albumArt',
+                  child: _buildAlbumArt(width: 300, height: 300),
+                ),
+                Spacer(flex: 2),
+                
+                // Song Info
+                GestureDetector(
+                  onTap: () => platform.invokeMethod('openApp', {'packageName': packageName}),
+                  child: Column(
+                    children: [
+                      Text(
+                        title,
+                        style: TextStyle(
+                          fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white,
+                          shadows: [Shadow(color: Colors.black45, blurRadius: 10)],
+                        ),
+                        textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis,
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        artist,
+                        style: TextStyle(
+                          fontSize: 18, color: Colors.white70, fontWeight: FontWeight.w500,
+                          shadows: [Shadow(color: Colors.black45, blurRadius: 10)],
+                        ),
+                        textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                
+                Spacer(flex: 2),
+                _buildProgressBar(), // New Progress Bar
+                SizedBox(height: 20),
+                
+                // Controls
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _buildControlButton(
+                      icon: Icons.skip_previous_rounded,
+                      onTap: () => _sendMediaControl('previous'),
+                      size: 32,
+                    ),
+                    SizedBox(width: 25),
+                    _buildControlButton(
+                      icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                      onTap: () => _sendMediaControl('play_pause'),
+                      size: 40,
+                      isPrimary: true,
+                    ),
+                    SizedBox(width: 25),
+                    _buildControlButton(
+                      icon: Icons.skip_next_rounded,
+                      onTap: () => _sendMediaControl('next'),
+                      size: 32,
+                    ),
+                  ],
+                ),
+                Spacer(flex: 3),
+              ],
+            ),
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildPortraitLayout() {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Color(0xFF0A0A0A),
-            Color(0xFF1A1A1A),
-            Color(0xFF0A0A0A),
-          ],
-        ),
-      ),
-      child: SafeArea(
-        child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: 24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Spacer(flex: 1),
-              
-              // Album Art
-              _buildAlbumArt(width: 280, height: 280),
-              
-              Spacer(flex: 1),
-              
-              // Song Info Card
-              Container(
-                width: double.infinity,
-                padding: EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: Color(0xFF1A1A1A).withOpacity(0.8),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: Color(0xFF2A2A2A),
-                    width: 1,
-                  ),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      title,
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                      textAlign: TextAlign.center,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      artist,
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: Color(0xFF9E9E9E),
-                        fontWeight: FontWeight.w500,
-                      ),
-                      textAlign: TextAlign.center,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-              
-              SizedBox(height: 40),
-              
-              // Control Buttons
-              _buildControlButtons(iconSize: 28, playIconSize: 36),
-              
-              Spacer(flex: 1),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
+  // Simple Landscape Layout
   Widget _buildLandscapeLayout() {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-          colors: [
-            Color(0xFF0A0A0A),
-            Color(0xFF1A1A1A),
-            Color(0xFF0A0A0A),
-          ],
-        ),
-      ),
-      child: SafeArea(
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Row(
-            children: [
-              // Left side - Album Art
-              Expanded(
-                flex: 2,
-                child: Center(
-                  child: _buildAlbumArt(width: 240, height: 240),
-                ),
-              ),
-              
-              SizedBox(width: 40),
-              
-              // Right side - Info and Controls
-              Expanded(
-                flex: 3,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Song Info
-                    Container(
-                      width: double.infinity,
-                      padding: EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: Color(0xFF1A1A1A).withOpacity(0.8),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: Color(0xFF2A2A2A),
-                          width: 1,
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+    return Stack(
+      children: [
+        _buildBlurredBackground(),
+        SafeArea(
+          child: Padding(
+            padding: EdgeInsets.all(30),
+            child: Row(
+              children: [
+                Center(child: _buildAlbumArt(width: 240, height: 240)),
+                SizedBox(width: 40),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(title, style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white), maxLines: 2),
+                      SizedBox(height: 8),
+                      Text(artist, style: TextStyle(fontSize: 20, color: Colors.white70)),
+                      Spacer(),
+                      _buildProgressBar(),
+                      SizedBox(height: 20),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Text(
-                            title,
-                            style: TextStyle(
-                              fontSize: 26,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          SizedBox(height: 8),
-                          Text(
-                            artist,
-                            style: TextStyle(
-                              fontSize: 18,
-                              color: Color(0xFF9E9E9E),
-                              fontWeight: FontWeight.w500,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                          _buildControlButton(icon: Icons.skip_previous_rounded, onTap: () => _sendMediaControl('previous'), size: 32),
+                          SizedBox(width: 20),
+                          _buildControlButton(icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, onTap: () => _sendMediaControl('play_pause'), size: 40, isPrimary: true),
+                          SizedBox(width: 20),
+                          _buildControlButton(icon: Icons.skip_next_rounded, onTap: () => _sendMediaControl('next'), size: 32),
                         ],
                       ),
-                    ),
-                    
-                    SizedBox(height: 32),
-                    
-                    // Control Buttons
-                    _buildControlButtons(iconSize: 32, playIconSize: 40),
-                  ],
+                      Spacer(),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
-      ),
+      ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.black,
       body: OrientationBuilder(
         builder: (context, orientation) {
-          if (orientation == Orientation.landscape) {
-            return _buildLandscapeLayout();
-          } else {
-            return _buildPortraitLayout();
-          }
+          return orientation == Orientation.landscape 
+              ? _buildLandscapeLayout() 
+              : _buildPortraitLayout();
         },
       ),
     );

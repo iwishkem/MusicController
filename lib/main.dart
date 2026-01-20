@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:palette_generator/palette_generator.dart';
 
@@ -24,6 +23,58 @@ class KemPlayerApp extends StatelessWidget {
   }
 }
 
+// --- WIDGET 1: The Isolated Background (Fixes Flickering) ---
+class BlurredBackground extends StatelessWidget {
+  final ImageProvider? imageProvider;
+  final Color mutedColor;
+
+  const BlurredBackground({
+    Key? key, 
+    required this.imageProvider,
+    required this.mutedColor,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    // RepaintBoundary tells Flutter: "Don't repaint this if the parent changes"
+    return RepaintBoundary(
+      child: Stack(
+        children: [
+          Container(color: Color(0xFF0A0A0A)),
+          if (imageProvider != null)
+            Positioned.fill(
+              child: Image(
+                image: imageProvider!,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(),
+              ),
+            ),
+          Positioned.fill(
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 50, sigmaY: 50),
+              child: Container(
+                color: Colors.black.withOpacity(0.6), 
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.black12, Colors.black87],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// --- WIDGET 2: The Main Screen ---
 class MusicControlScreen extends StatefulWidget {
   @override
   _MusicControlScreenState createState() => _MusicControlScreenState();
@@ -32,26 +83,24 @@ class MusicControlScreen extends StatefulWidget {
 class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBindingObserver {
   static const platform = MethodChannel('kemplayer/media');
 
-  // Media Info
+  // Song Data
   String title = 'Waiting for music...';
   String artist = 'KemPlayer';
+  String albumArtString = '';
   String albumArtUri = '';
-  String albumArt = '';
   String displayIconUri = '';
   String packageName = '';
+  
+  // Playback Data
   bool isPlaying = false;
-
-  // Progress & Timing
   Duration duration = Duration.zero;
   Duration position = Duration.zero;
-  int lastUpdateTime = 0;
   double playbackSpeed = 1.0;
-  Timer? _progressTimer;
-  bool _isDraggingSlider = false;
+  DateTime lastSyncTime = DateTime.now();
 
-  // Colors & UI
-  Color accentColor = Color(0xFF1DB954); // Default Green
-  Color? imageMutedColor;
+  // Visuals
+  Color accentColor = Color(0xFF1DB954);
+  Color mutedColor = Colors.black;
   bool _isDialogShowing = false;
 
   @override
@@ -65,14 +114,12 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
     
     platform.setMethodCallHandler(_platformCallHandler);
     WidgetsBinding.instance.addObserver(this);
-    
     _updateMediaInfo();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _progressTimer?.cancel();
     super.dispose();
   }
 
@@ -83,42 +130,33 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
     }
   }
 
-  void _startProgressTimer() {
-    _progressTimer?.cancel();
-    if (isPlaying) {
-      _progressTimer = Timer.periodic(Duration(milliseconds: 1000), (_) {
-        if (!_isDraggingSlider && mounted) setState(() {});
-      });
-    }
-  }
-
   Future<void> _updateMediaInfo() async {
     try {
       final info = await platform.invokeMethod('getMediaInfo');
       if (!mounted) return;
 
-      // Check if art changed to update palette
-      String newAlbumArt = info['albumArt'] ?? '';
-      String newUri = info['albumArtUri'] ?? '';
-      bool artChanged = (newAlbumArt != albumArt) || (newUri != albumArtUri);
+      String newArt = info['albumArt'] ?? '';
+      bool artChanged = newArt != albumArtString;
 
       setState(() {
         title = info['title'] ?? 'Waiting for music...';
         artist = info['artist'] ?? 'KemPlayer';
-        albumArtUri = newUri;
-        albumArt = newAlbumArt;
+        albumArtString = newArt;
+        albumArtUri = info['albumArtUri'] ?? '';
         displayIconUri = info['displayIconUri'] ?? '';
-        isPlaying = info['isPlaying'] ?? false;
         packageName = info['packageName'] ?? '';
         
+        // Critical: Update timing data
         duration = Duration(milliseconds: (info['duration'] ?? 0).toInt());
         position = Duration(milliseconds: (info['position'] ?? 0).toInt());
-        lastUpdateTime = (info['lastUpdateTime'] ?? 0).toInt();
+        isPlaying = info['isPlaying'] ?? false;
         playbackSpeed = (info['playbackSpeed'] ?? 1.0).toDouble();
+        
+        // Mark the exact time we received this data for the Seekbar to use
+        lastSyncTime = DateTime.now();
       });
 
       if (artChanged) _updatePalette();
-      _startProgressTimer();
       
     } on PlatformException catch (e) {
       print("Failed: '${e.message}'.");
@@ -127,49 +165,38 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
 
   Future<void> _updatePalette() async {
     ImageProvider? provider = _getImageProvider();
-    if (provider == null) {
-      setState(() => accentColor = Color(0xFF1DB954));
-      return;
-    }
+    if (provider == null) return;
 
     try {
-      final palette = await PaletteGenerator.fromImageProvider(
-        provider,
-        maximumColorCount: 20,
-      );
+      final palette = await PaletteGenerator.fromImageProvider(provider);
       if (mounted) {
         setState(() {
-          // Try to get a vibrant color, fallback to light vibrant, then default
-          accentColor = palette.vibrantColor?.color ?? 
-                        palette.lightVibrantColor?.color ?? 
-                        palette.dominantColor?.color ?? 
-                        Color(0xFF1DB954);
-          
-          // Get a muted color for background tint if needed
-          imageMutedColor = palette.mutedColor?.color;
+          accentColor = palette.vibrantColor?.color ?? palette.dominantColor?.color ?? Color(0xFF1DB954);
+          mutedColor = palette.mutedColor?.color ?? Colors.black;
         });
       }
     } catch (e) {
-      print("Error generating palette: $e");
+      print("Palette Error: $e");
     }
   }
 
   Future<void> _sendMediaControl(String command) async {
     await platform.invokeMethod('mediaControl', {'command': command});
-    // Optimistic update for UI responsiveness
-    if (command == 'play_pause') {
-      setState(() {
-        isPlaying = !isPlaying;
-        lastUpdateTime = DateTime.now().millisecondsSinceEpoch;
-      });
-      _startProgressTimer();
-    }
+  }
+
+  Future<void> _seekTo(int ms) async {
+    await platform.invokeMethod('seekTo', {'position': ms});
+    // Immediate local update for snappiness
+    setState(() {
+      position = Duration(milliseconds: ms);
+      lastSyncTime = DateTime.now();
+    });
   }
 
   Future<dynamic> _platformCallHandler(MethodCall call) async {
     switch (call.method) {
       case 'mediaInfoUpdated':
-        _updateMediaInfo(); // Refresh all data
+        _updateMediaInfo();
         break;
       case 'requestPermission':
         if (!_isDialogShowing && mounted) {
@@ -180,10 +207,7 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
             builder: (ctx) => AlertDialog(
               backgroundColor: Color(0xFF1A1A1A),
               title: Text("Permission Required", style: TextStyle(color: Colors.white)),
-              content: Text(
-                "KemPlayer needs 'Notification Access' to see music info.",
-                style: TextStyle(color: Colors.white70)
-              ),
+              content: Text("KemPlayer needs 'Notification Access' to function.", style: TextStyle(color: Colors.white70)),
               actions: [
                 TextButton(
                   onPressed: () {
@@ -202,77 +226,217 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
   }
 
   ImageProvider? _getImageProvider() {
-    if (albumArt.isNotEmpty) {
+    if (albumArtString.isNotEmpty) {
       try {
-        return MemoryImage(base64Decode(albumArt.replaceAll(RegExp(r'\s+'), '')));
+        return MemoryImage(base64Decode(albumArtString.replaceAll(RegExp(r'\s+'), '')));
       } catch (e) { return null; }
-    } else if (displayIconUri.isNotEmpty) {
-      return NetworkImage(displayIconUri);
-    } else if (albumArtUri.isNotEmpty) {
-      return NetworkImage(albumArtUri);
-    }
+    } else if (displayIconUri.isNotEmpty) return NetworkImage(displayIconUri);
+    else if (albumArtUri.isNotEmpty) return NetworkImage(albumArtUri);
     return null;
   }
 
-  // --- UI WIDGETS ---
-
-  Widget _buildBlurredBackground() {
-    final imageProvider = _getImageProvider();
-    return Stack(
+  // --- LAYOUTS ---
+  
+  Widget _buildControlButtons({double size = 32, double playSize = 48}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Container(color: Color(0xFF0A0A0A)),
-        if (imageProvider != null)
-          Positioned.fill(
-            child: Image(
-              image: imageProvider,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => Container(),
-            ),
+        IconButton(
+          icon: Icon(Icons.skip_previous_rounded, color: Colors.white, size: size),
+          onPressed: () => _sendMediaControl('previous'),
+        ),
+        SizedBox(width: 20),
+        Container(
+          width: playSize + 16,
+          height: playSize + 16,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: accentColor,
+            boxShadow: [BoxShadow(color: accentColor.withOpacity(0.4), blurRadius: 20)],
           ),
-        Positioned.fill(
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 45, sigmaY: 45),
-            child: Container(
-              // Tint the dark background slightly with the image's muted color
-              color: Colors.black.withOpacity(0.6), 
-            ),
+          child: IconButton(
+            icon: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.black, size: playSize),
+            onPressed: () => _sendMediaControl('play_pause'),
           ),
         ),
-        // Add a gradient fade for better text readability
-        Positioned.fill(
-          child: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black.withOpacity(0.2),
-                  Colors.black.withOpacity(0.8),
-                ],
-              ),
-            ),
-          ),
+        SizedBox(width: 20),
+        IconButton(
+          icon: Icon(Icons.skip_next_rounded, color: Colors.white, size: size),
+          onPressed: () => _sendMediaControl('next'),
         ),
       ],
     );
   }
 
-  Widget _buildProgressBar() {
-    // Calculate current position
-    int currentMs = position.inMilliseconds;
-    if (isPlaying && lastUpdateTime > 0) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final diff = now - lastUpdateTime;
-      currentMs += (diff * playbackSpeed).toInt();
-    }
-    
-    // Clamp values
-    final durationMs = duration.inMilliseconds;
-    if (currentMs > durationMs) currentMs = durationMs;
-    if (currentMs < 0) currentMs = 0;
+  Widget _buildAlbumArt({double size = 300}) {
+    return GestureDetector(
+      onTap: () => platform.invokeMethod('openApp', {'packageName': packageName}),
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [BoxShadow(color: Colors.black45, blurRadius: 30, offset: Offset(0, 15))],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(20),
+          child: _getImageProvider() != null 
+            ? Image(image: _getImageProvider()!, fit: BoxFit.cover)
+            : Container(color: Color(0xFF222222), child: Icon(Icons.music_note, size: 80, color: Colors.white12)),
+        ),
+      ),
+    );
+  }
 
-    double value = currentMs.toDouble();
-    double max = durationMs > 0 ? durationMs.toDouble() : 1.0;
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          // 1. Static Background (Won't rebuild on ticks)
+          BlurredBackground(imageProvider: _getImageProvider(), mutedColor: mutedColor),
+          
+          // 2. Active Content
+          SafeArea(
+            child: OrientationBuilder(
+              builder: (context, orientation) {
+                if (orientation == Orientation.landscape) {
+                  return Padding(
+                    padding: EdgeInsets.all(30),
+                    child: Row(
+                      children: [
+                        Center(child: _buildAlbumArt(size: 240)),
+                        SizedBox(width: 40),
+                        Expanded(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(title, style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white), maxLines: 2),
+                              Text(artist, style: TextStyle(fontSize: 20, color: Colors.white70), maxLines: 1),
+                              Spacer(),
+                              // 3. Isolated Progress Bar (Handles its own ticking)
+                              LiveProgressBar(
+                                duration: duration,
+                                position: position,
+                                isPlaying: isPlaying,
+                                playbackSpeed: playbackSpeed,
+                                lastSyncTime: lastSyncTime,
+                                accentColor: accentColor,
+                                onSeek: _seekTo,
+                              ),
+                              SizedBox(height: 20),
+                              _buildControlButtons(),
+                              Spacer(),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                } else {
+                  return Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 24),
+                    child: Column(
+                      children: [
+                        Spacer(flex: 3),
+                        Hero(tag: 'art', child: _buildAlbumArt(size: 300)),
+                        Spacer(flex: 2),
+                        Text(title, textAlign: TextAlign.center, style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white), maxLines: 2),
+                        SizedBox(height: 8),
+                        Text(artist, textAlign: TextAlign.center, style: TextStyle(fontSize: 18, color: Colors.white70), maxLines: 1),
+                        Spacer(flex: 2),
+                        // 3. Isolated Progress Bar (Handles its own ticking)
+                        LiveProgressBar(
+                          duration: duration,
+                          position: position,
+                          isPlaying: isPlaying,
+                          playbackSpeed: playbackSpeed,
+                          lastSyncTime: lastSyncTime,
+                          accentColor: accentColor,
+                          onSeek: _seekTo,
+                        ),
+                        SizedBox(height: 20),
+                        _buildControlButtons(),
+                        Spacer(flex: 3),
+                      ],
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// --- WIDGET 3: The Isolated Progress Bar (Fixes Sync & Ticking) ---
+class LiveProgressBar extends StatefulWidget {
+  final Duration duration;
+  final Duration position;
+  final bool isPlaying;
+  final double playbackSpeed;
+  final DateTime lastSyncTime;
+  final Color accentColor;
+  final Function(int) onSeek;
+
+  const LiveProgressBar({
+    Key? key,
+    required this.duration,
+    required this.position,
+    required this.isPlaying,
+    required this.playbackSpeed,
+    required this.lastSyncTime,
+    required this.accentColor,
+    required this.onSeek,
+  }) : super(key: key);
+
+  @override
+  _LiveProgressBarState createState() => _LiveProgressBarState();
+}
+
+class _LiveProgressBarState extends State<LiveProgressBar> {
+  late Timer _timer;
+  bool _isDragging = false;
+  double _dragValue = 0.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(Duration(milliseconds: 100), (timer) {
+      if (widget.isPlaying && !_isDragging) {
+        setState(() {}); // Only rebuilds the slider, not the background!
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Calculate accurate position
+    int currentMs;
+    
+    if (_isDragging) {
+      currentMs = _dragValue.toInt();
+    } else if (widget.isPlaying) {
+      final diff = DateTime.now().difference(widget.lastSyncTime).inMilliseconds;
+      currentMs = widget.position.inMilliseconds + (diff * widget.playbackSpeed).toInt();
+    } else {
+      currentMs = widget.position.inMilliseconds;
+    }
+
+    // Safety Clamps
+    final totalMs = widget.duration.inMilliseconds;
+    if (totalMs <= 0) return SizedBox(height: 30); // Hide if no duration
+    if (currentMs > totalMs) currentMs = totalMs;
+    if (currentMs < 0) currentMs = 0;
 
     return Column(
       children: [
@@ -280,27 +444,32 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
           data: SliderTheme.of(context).copyWith(
             trackHeight: 4,
             thumbShape: RoundSliderThumbShape(enabledThumbRadius: 6),
-            overlayShape: RoundSliderOverlayShape(overlayRadius: 14),
-            activeTrackColor: accentColor, // Dynamic Color
-            inactiveTrackColor: Colors.white24,
+            overlayShape: RoundSliderOverlayShape(overlayRadius: 12),
+            activeTrackColor: widget.accentColor,
+            inactiveTrackColor: Colors.white12,
             thumbColor: Colors.white,
-            overlayColor: accentColor.withOpacity(0.2),
+            overlayColor: widget.accentColor.withOpacity(0.2),
           ),
           child: Slider(
-            value: value.clamp(0.0, max),
-            min: 0.0,
-            max: max,
-            onChangeStart: (_) => _isDraggingSlider = true,
-            onChangeEnd: (newValue) {
-              _isDraggingSlider = false;
-              platform.invokeMethod('seekTo', {'position': newValue.toInt()});
+            value: currentMs.toDouble(),
+            min: 0,
+            max: totalMs.toDouble(),
+            onChangeStart: (val) {
               setState(() {
-                position = Duration(milliseconds: newValue.toInt());
-                lastUpdateTime = DateTime.now().millisecondsSinceEpoch;
+                _isDragging = true;
+                _dragValue = val;
               });
             },
-            onChanged: (newValue) {
-              setState(() {}); // Visual update only
+            onChanged: (val) {
+              setState(() {
+                _dragValue = val;
+              });
+            },
+            onChangeEnd: (val) {
+              widget.onSeek(val.toInt());
+              setState(() {
+                _isDragging = false;
+              });
             },
           ),
         ),
@@ -309,10 +478,8 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(_formatDuration(Duration(milliseconds: currentMs)), 
-                   style: TextStyle(color: Colors.white54, fontSize: 12)),
-              Text(_formatDuration(duration), 
-                   style: TextStyle(color: Colors.white54, fontSize: 12)),
+              Text(_formatDuration(Duration(milliseconds: currentMs)), style: TextStyle(color: Colors.white54, fontSize: 12)),
+              Text(_formatDuration(widget.duration), style: TextStyle(color: Colors.white54, fontSize: 12)),
             ],
           ),
         ),
@@ -321,210 +488,7 @@ class _MusicControlScreenState extends State<MusicControlScreen> with WidgetsBin
   }
 
   String _formatDuration(Duration d) {
-    if (d.inHours > 0) {
-      return "${d.inHours}:${d.inMinutes.remainder(60).toString().padLeft(2, '0')}:${d.inSeconds.remainder(60).toString().padLeft(2, '0')}";
-    }
+    if (d.inHours > 0) return "${d.inHours}:${d.inMinutes.remainder(60).toString().padLeft(2, '0')}:${d.inSeconds.remainder(60).toString().padLeft(2, '0')}";
     return "${d.inMinutes.remainder(60)}:${d.inSeconds.remainder(60).toString().padLeft(2, '0')}";
-  }
-
-  Widget _buildControlButton({
-    required IconData icon,
-    required VoidCallback onTap,
-    required double size,
-    bool isPrimary = false,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: isPrimary ? 75 : 55,
-        height: isPrimary ? 75 : 55,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: isPrimary ? accentColor : Colors.transparent, // Dynamic Color
-          boxShadow: isPrimary ? [
-            BoxShadow(
-              color: accentColor.withOpacity(0.4),
-              blurRadius: 20,
-              offset: Offset(0, 8),
-            )
-          ] : null,
-        ),
-        child: Icon(
-          icon,
-          size: size,
-          color: isPrimary ? Colors.black : Colors.white,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAlbumArt({double? width, double? height}) {
-    final imageProvider = _getImageProvider();
-    
-    return GestureDetector(
-      onTap: () => platform.invokeMethod('openApp', {'packageName': packageName}),
-      child: Container(
-        width: width,
-        height: height,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.5),
-              blurRadius: 30,
-              offset: Offset(0, 15),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(20),
-          child: imageProvider != null 
-            ? Image(image: imageProvider, fit: BoxFit.cover)
-            : Container(
-                color: Color(0xFF2A2A2A),
-                child: Icon(Icons.music_note_rounded, size: 80, color: Colors.white12),
-              ),
-        ),
-      ),
-    );
-  }
-
-  // --- LAYOUTS ---
-
-  Widget _buildPortraitLayout() {
-    return Stack(
-      children: [
-        _buildBlurredBackground(),
-        SafeArea(
-          child: Padding(
-            padding: EdgeInsets.symmetric(horizontal: 24),
-            child: Column(
-              children: [
-                Spacer(flex: 3),
-                Hero(
-                  tag: 'albumArt',
-                  child: _buildAlbumArt(width: 300, height: 300),
-                ),
-                Spacer(flex: 2),
-                
-                // Song Info
-                GestureDetector(
-                  onTap: () => platform.invokeMethod('openApp', {'packageName': packageName}),
-                  child: Column(
-                    children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white,
-                          shadows: [Shadow(color: Colors.black45, blurRadius: 10)],
-                        ),
-                        textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis,
-                      ),
-                      SizedBox(height: 8),
-                      Text(
-                        artist,
-                        style: TextStyle(
-                          fontSize: 18, color: Colors.white70, fontWeight: FontWeight.w500,
-                          shadows: [Shadow(color: Colors.black45, blurRadius: 10)],
-                        ),
-                        textAlign: TextAlign.center, maxLines: 1, overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-                
-                Spacer(flex: 2),
-                _buildProgressBar(), // New Progress Bar
-                SizedBox(height: 20),
-                
-                // Controls
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _buildControlButton(
-                      icon: Icons.skip_previous_rounded,
-                      onTap: () => _sendMediaControl('previous'),
-                      size: 32,
-                    ),
-                    SizedBox(width: 25),
-                    _buildControlButton(
-                      icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                      onTap: () => _sendMediaControl('play_pause'),
-                      size: 40,
-                      isPrimary: true,
-                    ),
-                    SizedBox(width: 25),
-                    _buildControlButton(
-                      icon: Icons.skip_next_rounded,
-                      onTap: () => _sendMediaControl('next'),
-                      size: 32,
-                    ),
-                  ],
-                ),
-                Spacer(flex: 3),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // Simple Landscape Layout
-  Widget _buildLandscapeLayout() {
-    return Stack(
-      children: [
-        _buildBlurredBackground(),
-        SafeArea(
-          child: Padding(
-            padding: EdgeInsets.all(30),
-            child: Row(
-              children: [
-                Center(child: _buildAlbumArt(width: 240, height: 240)),
-                SizedBox(width: 40),
-                Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(title, style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.white), maxLines: 2),
-                      SizedBox(height: 8),
-                      Text(artist, style: TextStyle(fontSize: 20, color: Colors.white70)),
-                      Spacer(),
-                      _buildProgressBar(),
-                      SizedBox(height: 20),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          _buildControlButton(icon: Icons.skip_previous_rounded, onTap: () => _sendMediaControl('previous'), size: 32),
-                          SizedBox(width: 20),
-                          _buildControlButton(icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, onTap: () => _sendMediaControl('play_pause'), size: 40, isPrimary: true),
-                          SizedBox(width: 20),
-                          _buildControlButton(icon: Icons.skip_next_rounded, onTap: () => _sendMediaControl('next'), size: 32),
-                        ],
-                      ),
-                      Spacer(),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: OrientationBuilder(
-        builder: (context, orientation) {
-          return orientation == Orientation.landscape 
-              ? _buildLandscapeLayout() 
-              : _buildPortraitLayout();
-        },
-      ),
-    );
   }
 }

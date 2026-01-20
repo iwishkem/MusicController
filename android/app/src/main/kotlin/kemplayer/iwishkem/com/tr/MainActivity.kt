@@ -119,7 +119,7 @@ class MainActivity: FlutterActivity() {
         methodChannel?.invokeMethod("mediaInfoUpdated", getCurrentMediaInfo())
     }
 
-    private fun getCurrentMediaInfo(): Map<String, Any?> {
+        private fun getCurrentMediaInfo(): Map<String, Any?> {
         val metadata = mediaController?.metadata
         val playbackState = mediaController?.playbackState
         
@@ -129,10 +129,18 @@ class MainActivity: FlutterActivity() {
         val albumArtString = albumArt?.let { bitmapToBase64(it) }
         
         val duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
-        val position = playbackState?.position ?: 0L
-        val lastUpdateTime = playbackState?.lastPositionUpdateTime ?: 0L
-        val speed = playbackState?.playbackSpeed ?: 1.0f
         
+        // Fix: Calculate the exact real-time position right now
+        var currentPosition = playbackState?.position ?: 0L
+        if (playbackState?.state == PlaybackState.STATE_PLAYING) {
+            val timeDelta = android.os.SystemClock.elapsedRealtime() - (playbackState?.lastPositionUpdateTime ?: 0L)
+            currentPosition += (timeDelta * (playbackState?.playbackSpeed ?: 1.0f)).toLong()
+        }
+        
+        // Safety check
+        if (currentPosition < 0) currentPosition = 0
+        if (duration > 0 && currentPosition > duration) currentPosition = duration
+
         return mapOf(
             "title" to (metadata?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: "Waiting for music..."),
             "artist" to (metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: "KemPlayer"),
@@ -142,11 +150,11 @@ class MainActivity: FlutterActivity() {
             "isPlaying" to (playbackState?.state == PlaybackState.STATE_PLAYING),
             "packageName" to mediaController?.packageName,
             "duration" to duration,
-            "position" to position,
-            "lastUpdateTime" to lastUpdateTime,
-            "playbackSpeed" to speed
+            "position" to currentPosition, // Sending calculated real-time position
+            "playbackSpeed" to (playbackState?.playbackSpeed ?: 1.0f)
         )
     }
+
 
     private fun handleMediaControl(command: String?) {
         val transportControls = mediaController?.transportControls
